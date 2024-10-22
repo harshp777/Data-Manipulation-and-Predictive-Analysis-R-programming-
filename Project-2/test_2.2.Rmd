@@ -1,0 +1,523 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  word_document: default==
+  html_document:
+    df_print: paged
+---
+
+```{r}
+#install.packages("caret")
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(caret)
+library(Matrix)
+```
+
+
+```{r}
+rm(list = ls())
+```
+
+
+### Checking Data and Descriptive Statistics (Question 1)
+```{r}
+browser.sites <- read.table(file = "browser-sites.txt", header = FALSE)
+head(browser.sites)
+```
+
+#### Convert to csv and then Map Numbers to Website Names
+```{r}
+browser.sites = browser.sites %>% mutate(index = row_number())
+colnames(browser.sites) = c('website', 'site')
+browser.sites
+
+write.csv(browser.sites, file = "browser.sites.csv", row.names = FALSE)
+```
+
+#### Reading Files
+```{r}
+bs = read.csv('browser.sites.csv')
+bs
+```
+#### View browser-domains data
+```{r}
+bd_base = read.csv('browser-domains.csv')
+head(bd_base)
+```
+
+### Merging and Processing Data (Question 2)
+#### Merging Browser Sites into Browser Domains to get the site names
+```{r}
+bd = merge(bd_base, bs)
+head(bd)
+#write.csv(bd, file = "bd.csv", row.names = FALSE)
+```
+
+```{r}
+# Removing Website id
+df = bd[, -1] 
+df
+```
+
+#### View browser-totalspend data
+```{r}
+bts = read.csv('browser-totalspend.csv')
+colnames(bts)[1] = "UserID"
+head(bts)
+```
+
+#### Data quality check and EDA
+```{r}
+sum(is.na(bts))
+sum(is.na(df))
+```
+
+### Initial Approach - Problems Faced - Out of Memory (Question 4)
+```{}
+id_mapping <- unique(df$id)
+site_mapping <- unique(df$website)
+
+# Create an empty dense matrix
+dense_mat <- matrix(0, nrow = length(id_mapping), ncol = length(site_mapping))
+
+# Fill the dense matrix with the corresponding values
+for (i in 1:nrow(df)) {
+  user_index <- match(df$id[i], id_mapping)
+  site_index <- match(df$website[i], site_mapping)
+  dense_mat[user_index, site_index] <- df$visits[i]
+}
+
+# Create a new data frame
+new_df <- data.frame(UserID = id_mapping, dense_mat)
+colnames(new_df)[2:(length(site_mapping) + 1)] <- site_mapping
+
+```
+
+#### Solution - Creating Dummy for Website
+```{r}
+id_mapping = unique(df$id)
+site_mapping = unique(df$website)
+
+sparse_mat <- sparseMatrix(
+  i = match(df$id, id_mapping),
+  j = match(df$website, site_mapping),
+  x = df$visits,
+  dims = c(length(id_mapping), length(site_mapping))
+)
+
+# Convert the sparse matrix to a standard matrix
+dense_mat = as.matrix(sparse_mat)
+
+colnames(dense_mat) = site_mapping
+
+# Create a new data frame
+new_df = data.frame(UserID = id_mapping, dense_mat)
+dim(new_df)
+head(new_df)
+```
+```{r}
+final_df = merge(bts, new_df)
+final_df
+```
+
+```{r}
+column_sums <- colSums(final_df[, -c(1, 2)])
+total_df <- as.data.frame(t(data.frame(t(column_sums))))
+#total_df
+```
+
+```{r}
+total_df$w = row.names(total_df)
+colnames(total_df) = c('views', 'website')
+row.names(total_df) = NULL
+head(total_df)
+```
+
+```{r}
+summary(total_df$views)
+```
+
+```{r}
+ggplot(top_n(total_df, 10, views), aes(x=reorder(website, +views), y=views, fill=website)) + 
+  geom_bar(stat='identity') + coord_flip() + theme_minimal()
+```
+
+Minimum (Min): The minimum number of views recorded is 507. This represents the smallest value in the dataset, indicating the least number of views for a particular website.
+
+1st Quartile (1st Qu.): 25% of the websites have views less than or equal to 6196. This marks the lower quartile, showing that a quarter of the websites have relatively low viewership.
+
+Median: The median number of views, also known as the second quartile or the median, is 9927. This indicates that half of the websites have views less than or equal to 9927. It provides the middle point of the data distribution.
+
+Mean: The mean number of views is 54966. This is the average value of views across all websites. The mean is influenced by extreme values, so it's higher than the median, indicating the presence of websites with significantly higher views.
+
+3rd Quartile (3rd Qu.): 75% of the websites have views less than or equal to 22844. This marks the upper quartile, showing that a quarter of the websites have relatively high viewership.
+
+Maximum (Max): The maximum number of views recorded is 3597188. This represents the largest value in the dataset, indicating the highest number of views for a particular website.
+
+In summary, the data is right-skewed, as the mean is significantly larger than the median. This skewness suggests that there are a few websites with exceptionally high views, pulling the mean upwards. The majority of websites (75%) have views below 22844, but there are significant variations, especially with the presence of high-view websites.
+
+
+### Question 6 : Which websites do user 1-10 visited and how much time they spent on each site?
+```{r}
+q6 = filter(final_df, UserID <= 10)
+q6
+```
+
+```{r}
+#c(colnames(q6[, 3:ncol(q6)]))
+```
+
+
+```{r}
+q6_2 = q6[, -2] %>% pivot_longer(cols=colnames(q6[, 3:ncol(q6)]),
+                    names_to='website',
+                    values_to='views')
+q6_2
+```
+
+```{r}
+q6_top10 = q6_2 %>% filter(UserID == 1) %>% arrange(desc(views)) %>% slice(1:10) 
+q6_top10
+ggplot(q6_top10, aes(x=reorder(website, -views), y=views)) + 
+  geom_bar(stat='identity', col=rgb(0.2,0.4,0.6,0.6), width=0.5) + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size=9)) + ggtitle('Top 10 websites where Users 1 spent most of the time')
+for (i in 2:10) {
+  temp = q6_2 %>% filter(UserID == i) %>% arrange(desc(views)) %>% slice(1:10) 
+  q6_top10 = rbind(q6_top10, temp)
+}
+q6_top10
+```
+
+```{r}
+groupped = q6_top10 %>% group_by(website)  %>% summarise(total_views = sum(views))
+groupped
+```
+
+
+```{r}
+ggplot(groupped, aes(x=reorder(website, -total_views), y=total_views)) + 
+  geom_bar(stat='identity', col=rgb(0.2,0.4,0.6,0.6), width=0.5) + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size=7)) + ggtitle('Top 10 websites where Users(1-10) spent most of the time')
+```
+
+#### Checking Distribution of Spend
+```{r}
+ggplot(final_df, aes(y = spend)) +
+  geom_boxplot() +
+  ylab("Spending") +
+  ggtitle("Boxplot of Spending")
+
+ggplot(data = final_df, aes(x = "", y = spend)) + geom_violin()
+```
+
+```{r}
+summary(final_df$spend)
+```
+
+```{r}
+hist(final_df$spend, breaks = 30, main = "Histogram of Spend", xlab = "Spend")
+
+qqnorm(final_df$spend)
+qqline(final_df$spend)
+```
+
+```{}
+# Sum the total time spent by users on each website (excluding "UserID" and "Spend")
+my_data_total_time <- final_df %>%
+  mutate(total_time = rowSums(select(., -UserID, -spend)))
+
+# Create a new dataframe with website name and total time spent
+new_dataframe <- data.frame(
+  WebsiteName = names(final_df)[grepl("^website", names(final_df))],
+  TotalTimeSpent = colSums(select(final_df, -UserID, -spend))
+)
+```
+
+### Preparing Data for Training
+#### Not including UserID as an Independant Variable
+```{r}
+data_init = final_df[-1]
+data_init
+```
+
+### Applying Min-Max Scaling to Website visits
+```{r}
+min_max_scaling <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+
+data_init[, -1] <- as.data.frame(lapply(data_init[, -1], min_max_scaling))
+
+head(data_init)
+
+```
+
+#### Train-Test Split
+```{r}
+set.seed(123)
+sample_index <- sample(seq_len(nrow(data_init)), size = 0.8 * nrow(data_init))
+train_data <- data_init[sample_index, ]
+test_data <- data_init[-sample_index, ]
+
+dim(train_data)
+dim(test_data)
+```
+
+### Modelling
+#### OLS
+```{r}
+lm_model <- lm(spend ~ ., data = train_data)
+summary(lm_model)
+```
+
+
+```{r}
+# Check assumptions
+# 1. Linearity: Scatter plot of spend vs. amazon
+#plot(train_data$whenu.com, train_data$spend, main = "Scatter plot of Spend vs. Amazon", xlab = "Amazon", ylab = "Spend")
+#abline(lm_model, col = "red")
+
+```
+
+```{r}
+#pairs(~ spend + atdmt.com + weatherbug.com + msn.com + whenu.com, data = train_data, main = "Scatter Plot Matrix")
+```
+
+#### Checking OLS Predictions and Residual
+```{r}
+lm_predictions <- predict(lm_model, newdata = test_data)
+summary(lm_predictions)
+```
+
+```{r}
+res <- resid(lm_model)
+plot(fitted(lm_model), res)
+abline(0,0)
+```
+
+```{r}
+lm_rmse <- sqrt(mean((test_data$spend - lm_predictions)^2))
+lm_rmse
+```
+
+In situations like this, addressing challenges in a high-dimensional feature space requires employing various techniques. Although the assumptions related to the normality of residual errors are met, the linear relationship between input and output variables appears somewhat lacking. To tackle this issue, utilizing feature transformation methods becomes crucial. Additionally, due to the substantial number of features, avoiding the use of OLS technique is advisable. One approach is to conduct feature selection to identify the most significant features. Subsequently, performing OLS with these selected features can lead to improved results.
+
+Moreover, leveraging advanced models such as ensemble methods and decision tree regressors, which are non-parametric models, proves to be highly effective when dealing with such complex datasets. These models can capture intricate patterns and relationships within the data, ensuring a more accurate and reliable analysis.
+
+
+```{r}
+comparison_df <- data.frame(Observed = test_data$spend[1:50], Predicted = lm_predictions[1:50])
+comparison_df
+```
+
+### Preparing Data for Training (Question 3, 4)
+#### Applying Log Transformation on Spend(Target)
+```{r}
+log_final_df <- final_df
+log_final_df$spend <- log(log_final_df$spend)
+```
+
+```{r}
+
+ggplot(log_final_df, aes(y = spend)) +
+  geom_boxplot() +
+  ylab("Spending") +
+  ggtitle("Boxplot of Spending")
+
+ggplot(data = log_final_df, aes(x = "", y = spend)) + geom_violin()
+
+```
+```{r}
+hist(log_final_df$spend, breaks = 30, main = "Histogram of Spend", xlab = "Spend")
+
+qqnorm(log_final_df$spend)
+qqline(log_final_df$spend)
+```
+The Shape of the Q-Q plot suggests that the data is Right Skewed
+
+```{}
+# Sum the total time spent by users on each website (excluding "UserID" and "Spend")
+my_data_total_time <- log_final_df %>%
+  mutate(total_time = rowSums(select(., -UserID, -spend)))
+
+# Create a new dataframe with website name and total time spent
+new_dataframe <- data.frame(
+  WebsiteName = names(log_final_df)[grepl("^website", names(log_final_df))],
+  TotalTimeSpent = colSums(select(log_final_df, -UserID, -spend))
+)
+```
+
+```{r}
+data_init = log_final_df[-1]
+data_init
+```
+
+```{r}
+min_max_scaling <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+
+data_init[, -1] <- as.data.frame(lapply(data_init[, -1], min_max_scaling))
+
+head(data_init)
+```
+
+#### Train-Test Split
+```{r}
+set.seed(123)
+sample_index <- sample(seq_len(nrow(data_init)), size = 0.8 * nrow(data_init))
+train_data <- data_init[sample_index, ]
+test_data <- data_init[-sample_index, ]
+
+dim(train_data)
+dim(test_data)
+```
+
+### Modelling
+#### OLS
+```{r}
+lm_model <- lm(spend ~ ., data = train_data)
+summary(lm_model)
+```
+
+#### Checking OLS Predictions and Residual
+```{r}
+lm_predictions <- predict(lm_model, newdata = test_data)
+summary(lm_predictions)
+```
+
+```{r}
+res <- resid(lm_model)
+plot(fitted(lm_model), res)
+abline(0,0)
+```
+
+#### Ridge (Question 5)
+```{r}
+# Convert predictor matrix to matrix if not already done
+x_train <- as.matrix(train_data[-1])  # Exclude the 'spend' column
+y_train <- train_data$spend
+
+fit.ridge <- glmnet(x = x_train, y = y_train, alpha = 0)
+
+plot(fit.ridge, xvar = "lambda", label = TRUE)
+
+lambda_values <- 10^seq(10, -2, length = 100)
+
+cv.ridge <- cv.glmnet(x_train, y_train, alpha = 0,lambda=lambda_values, nfolds = 10)
+
+plot(cv.ridge, xvar = "lambda", label = TRUE)
+
+best_lambda <- cv.ridge$lambda.min
+
+# Train a Ridge model with the best lambda
+ridge_model <- glmnet(x_train, y_train, alpha = 0, lambda = best_lambda)
+
+```
+
+```{r}
+x_test <- as.matrix(test_data[-1])
+y_test <- test_data$spend
+ridge_predictions <- predict(ridge_model, newx = x_test, s = best_lambda)
+ridge_rmse <- sqrt(mean((y_test - ridge_predictions)^2))
+
+# Plot RMSE vs. lambda for Ridge
+ridge_rmse_values <- sqrt(cv.ridge$cvm)
+plot(log(lambda_values), ridge_rmse_values, type = "b", xlab = "Log Lambda", ylab = "RMSE")
+
+# Show the best lambda and RMSE
+cat("Best Log(Lambda):", log(best_lambda), "\n")
+cat("RMSE for Best Lambda:", ridge_rmse, "\n")
+```
+
+#### Lasso (Question 5)
+```{r}
+fit.lasso <- glmnet(x = x_train, y = y_train, alpha = 1)
+
+
+plot(fit.lasso, xvar = "lambda", label = TRUE)
+lambda_values <- 10^seq(10, -2, length = 100)
+
+cv.lasso <- cv.glmnet(x_train, y_train, alpha = 1, lambda = lambda_values, nfolds = 10)
+
+# Plot cross-validation results
+plot(cv.lasso, xvar = "lambda", label = TRUE)
+
+best_lambda <- cv.lasso$lambda.min
+
+lasso_model <- glmnet(x_train, y_train, alpha = 1, lambda = best_lambda)
+```
+
+```{r}
+
+lasso_predictions <- predict(lasso_model, newx = x_test, s = best_lambda)
+lasso_rmse <- sqrt(mean((y_test - lasso_predictions)^2))
+
+# Plot RMSE vs. lambda for Lasso
+lasso_rmse_values <- sqrt(cv.lasso$cvm)
+plot(log(lambda_values), lasso_rmse_values, type = "b", xlab = "Log Lambda", ylab = "RMSE")
+
+# Show the best lambda and RMSE
+cat("Best Log(Lambda):", log(best_lambda), "\n")
+cat("RMSE for Best Lambda:", lasso_rmse, "\n")
+```
+
+It is essential to note that linear regression does not effectively handle issues like multicollinearity, which is better managed by regularization techniques. Therefore, instead of opting for linear regression, applying methods like Ridge or Lasso regression is more suitable.
+
+Ridge regression introduces a penalty term that helps prevent overfitting. This regularization promotes a more generalized model, enhancing its performance on unseen data. This leads to a lower RMSE compared to the linear regression model.
+
+In the case of Lasso regression, it possesses a unique capability – it conducts feature selection by setting some coefficients exactly to zero. This feature becomes invaluable when there are irrelevant or redundant features in our dataset. Lasso automatically excludes these features, producing a more interpretable model with a reduced number of relevant features. Given the importance of feature selection in our data, Lasso is a superior choice, as it optimally selects features by converting some of them to zero."
+
+
+
+```{}
+df6 <- bd %>%
+  filter(id >= 1, id <= 10)
+df6
+```
+
+```{}
+ggplot(df6, aes(x = as.factor(site), y = visits)) +
+  geom_bar(stat = "identity", fill = "navyblue") +
+  labs(title = "Time Spent per User and Site",
+       x = "Site ID",
+       y = "Time Spent (minutes)") +
+  facet_wrap(~id, ncol = 4) +
+  theme_minimal()
+
+#ggsave("facet_plot.png", p, width = 10, height = 20)
+```
+
+```{}
+# Group the data by user ID (id)
+grouped_data <- bd %>%
+  group_by(id)
+
+# Calculate the total visits for each user and website
+agg_data <- grouped_data %>%
+  group_by(id, site) %>%
+  summarise(total_visits = sum(visits))
+
+# Rank the websites within each user group based on total visits
+ranked_data <- agg_data %>%
+  group_by(id) %>%
+  arrange(desc(total_visits)) %>%
+  mutate(rank = row_number())
+
+# Select the top 5 websites for each user
+top_5_sites <- ranked_data %>%
+  filter(rank <= 5)
+
+# Create a faceted bar plot
+ggplot(top_5_sites, aes(x = as.factor(site), y = total_visits)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Top 5 Visited Websites for Individual Users",
+       x = "Website ID",
+       y = "Total Visits") +
+  facet_wrap(~id, scales = "free") +
+  theme_minimal()
+```
+
+
